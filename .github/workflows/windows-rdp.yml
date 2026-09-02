@@ -8,7 +8,7 @@ jobs:
   build:
     runs-on: windows-latest
 
-    # 48 hours = 2880 minutes
+    # 48 hours
     timeout-minutes: 2880
 
     steps:
@@ -21,22 +21,19 @@ jobs:
         run: |
           Write-Host "Enabling Remote Desktop..."
 
-          # Enable RDP
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
             -Name "fDenyTSConnections" `
             -Value 0
 
-          # Enable Remote Desktop Firewall rules
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-          # Allow RDP authentication
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
             -Name "UserAuthentication" `
             -Value 0
 
-          # Disable RDP idle/session timeout policies
+          # Disable RDP idle timeout
           New-ItemProperty `
             -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' `
             -Name "MaxIdleTime" `
@@ -44,6 +41,7 @@ jobs:
             -Value 0 `
             -Force
 
+          # Disable disconnected session timeout
           New-ItemProperty `
             -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' `
             -Name "MaxDisconnectionTime" `
@@ -51,6 +49,7 @@ jobs:
             -Value 0 `
             -Force
 
+          # Disable maximum connection time
           New-ItemProperty `
             -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' `
             -Name "MaxConnectionTime" `
@@ -58,19 +57,35 @@ jobs:
             -Value 0 `
             -Force
 
-          Write-Host "RDP enabled."
+          # Make sure RDP service is running
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service -Name TermService
+
+          Write-Host "RDP enabled successfully."
 
       # =========================================================
-      # 2. Create Administrator Account
+      # 2. Create Admin Account
       # =========================================================
       - name: 2. Create Admin Account
         shell: powershell
         run: |
           $Username = "Azizi"
-          $Password = ConvertTo-SecureString "${{ secrets.RDP_PASSWORD }}" -AsPlainText -Force
+          $PlainPassword = "Azizistore@123"
 
-          # Create user if it doesn't already exist
-          if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
+          Write-Host "Creating user: $Username"
+
+          # Convert password
+          $Password = ConvertTo-SecureString `
+            $PlainPassword `
+            -AsPlainText `
+            -Force
+
+          # Check whether user exists
+          $ExistingUser = Get-LocalUser `
+            -Name $Username `
+            -ErrorAction SilentlyContinue
+
+          if ($null -eq $ExistingUser) {
 
               New-LocalUser `
                 -Name $Username `
@@ -79,11 +94,12 @@ jobs:
                 -AccountNeverExpires `
                 -Description "RDP Administrator"
 
-              Write-Host "User $Username created."
+              Write-Host "User created successfully."
 
           } else {
 
-              Write-Host "User $Username already exists."
+              Write-Host "User already exists."
+              Write-Host "Updating password..."
 
               Set-LocalUser `
                 -Name $Username `
@@ -96,7 +112,16 @@ jobs:
             -Member $Username `
             -ErrorAction SilentlyContinue
 
-          Write-Host "User added to Administrators."
+          # Make sure account is enabled
+          Enable-LocalUser -Name $Username
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "RDP USER READY"
+          Write-Host "========================================"
+          Write-Host "Username: Azizi"
+          Write-Host "Password: Azizistore@123"
+          Write-Host "========================================"
 
       # =========================================================
       # 3. Install Tailscale
@@ -131,11 +156,13 @@ jobs:
               exit 1
           }
 
-          Write-Host "Tailscale installed successfully."
+          Write-Host "Tailscale installed."
 
-          # =====================================================
-          # Connect Tailscale
-          # =====================================================
+          # Check auth key
+          if ([string]::IsNullOrWhiteSpace($Env:TAILSCALE_AUTHKEY)) {
+              Write-Error "TAILSCALE_AUTHKEY GitHub Secret is empty or missing."
+              exit 1
+          }
 
           Write-Host "Connecting to Tailscale..."
 
@@ -146,10 +173,7 @@ jobs:
 
           Start-Sleep -Seconds 10
 
-          # =====================================================
-          # Get Tailscale IP
-          # =====================================================
-
+          # Get IPv4
           $ts_ip = (& $Tailscale ip -4).Trim()
 
           if ([string]::IsNullOrWhiteSpace($ts_ip)) {
@@ -159,25 +183,22 @@ jobs:
 
           Write-Host ""
           Write-Host "==================================================" -ForegroundColor Green
-          Write-Host "          WINDOWS RDP SERVER READY" -ForegroundColor Cyan
+          Write-Host "             WINDOWS RDP READY" -ForegroundColor Cyan
           Write-Host "==================================================" -ForegroundColor Green
           Write-Host ""
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
           Write-Host "Username     : Azizi" -ForegroundColor Yellow
+          Write-Host "Password     : Azizistore@123" -ForegroundColor Yellow
           Write-Host ""
-          Write-Host "Connect using Windows Remote Desktop:"
+          Write-Host "Open Remote Desktop (mstsc.exe)"
           Write-Host ""
-          Write-Host "    mstsc.exe" -ForegroundColor Magenta
+          Write-Host "Connect to:"
+          Write-Host "$ts_ip" -ForegroundColor Cyan
           Write-Host ""
-          Write-Host "Then enter:"
-          Write-Host "    $ts_ip" -ForegroundColor Cyan
-          Write-Host ""
-          Write-Host "==================================================" -ForegroundColor Green
-          Write-Host "Server will stay alive for up to 48 hours."
           Write-Host "==================================================" -ForegroundColor Green
 
       # =========================================================
-      # 4. Verify RDP + Tailscale
+      # 4. Verify RDP and Tailscale
       # =========================================================
       - name: 4. Verify Server
         shell: powershell
@@ -188,10 +209,11 @@ jobs:
           $RDPService = Get-Service -Name TermService
 
           if ($RDPService.Status -ne "Running") {
-              Start-Service TermService
+              Start-Service -Name TermService
           }
 
-          Write-Host "RDP service: $((Get-Service TermService).Status)"
+          Write-Host "RDP Service:"
+          Get-Service -Name TermService
 
           Write-Host ""
           Write-Host "Checking Tailscale..."
@@ -199,27 +221,30 @@ jobs:
           & "C:\Program Files\Tailscale\tailscale.exe" status
 
           Write-Host ""
-          Write-Host "Tailscale IP:"
+          Write-Host "Tailscale IPv4:"
+
           & "C:\Program Files\Tailscale\tailscale.exe" ip -4
 
       # =========================================================
-      # 5. Keep Windows Runner Alive for 48 Hours
+      # 5. Keep Server Alive - 48 Hours
       # =========================================================
       - name: 5. Keep Server Alive - 48 Hours
         shell: powershell
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
 
           Write-Host ""
           Write-Host "==================================================" -ForegroundColor Green
-          Write-Host "        SERVER RUNNING FOR 48 HOURS"
+          Write-Host "        SERVER RUNNING FOR 48 HOURS" -ForegroundColor Green
           Write-Host "==================================================" -ForegroundColor Green
 
-          # 48 hours = 2880 minutes
+          # 2880 minutes = 48 hours
           for ($i = 1; $i -le 2880; $i++) {
 
               Start-Sleep -Seconds 60
 
-              # Check Tailscale every 5 minutes
+              # Check every 5 minutes
               if (($i % 5) -eq 0) {
 
                   Write-Host ""
@@ -227,16 +252,21 @@ jobs:
 
                   try {
 
-                      $Status = & "C:\Program Files\Tailscale\tailscale.exe" status 2>&1
+                      $Status = & `
+                        "C:\Program Files\Tailscale\tailscale.exe" `
+                        status 2>&1
 
-                      Write-Host "Tailscale status: OK"
+                      Write-Host "Tailscale is running."
 
                   }
                   catch {
 
-                      Write-Host "Tailscale check failed. Attempting reconnect..."
+                      Write-Host "Tailscale check failed."
+                      Write-Host "Trying to reconnect..."
 
-                      & "C:\Program Files\Tailscale\tailscale.exe" up `
+                      & `
+                        "C:\Program Files\Tailscale\tailscale.exe" `
+                        up `
                         --authkey="$Env:TAILSCALE_AUTHKEY" `
                         --hostname="github-rdp-server" `
                         --unattended=true
@@ -246,6 +276,5 @@ jobs:
 
           Write-Host ""
           Write-Host "==================================================" -ForegroundColor Yellow
-          Write-Host "48 HOURS COMPLETED"
-          Write-Host "GitHub runner will now terminate."
+          Write-Host "              48 HOURS COMPLETED" -ForegroundColor Yellow
           Write-Host "==================================================" -ForegroundColor Yellow
