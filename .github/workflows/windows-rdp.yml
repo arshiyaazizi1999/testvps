@@ -1,4 +1,4 @@
-```yaml
+
 name: Windows Cloud RDP
 
 on:
@@ -249,4 +249,3 @@ jobs:
           Write-Host "48 HOURS COMPLETED"
           Write-Host "GitHub runner will now terminate."
           Write-Host "==================================================" -ForegroundColor Yellow
-```
